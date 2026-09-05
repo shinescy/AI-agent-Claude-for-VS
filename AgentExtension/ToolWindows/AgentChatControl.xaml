@@ -1,0 +1,25 @@
+<UserControl x:Class="AgentExtension.ToolWindows.AgentChatControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             AllowDrop="True"
+             DragOver="OnPanelDragOver"
+             Drop="OnPanelDrop">
+    <Grid>
+        <!--
+            WebView2 由代码隐藏创建并放进这个容器，**不在这里声明**：它得能被整个换掉。
+            WebView2 的控制器绑在创建它时所在的那个顶层窗口上，面板从浮动窗口拖去停靠时
+            VS 会销毁那个窗口，控制器随之关闭；而 WPF 的 HwndHost 完好无损、永不重建，
+            所以只能由我们扔掉旧控件、新建一个（见 AgentChatControl.xaml.cs 的 RecreateWebViewControl）。
+
+            另外 WebView2 继承自 HwndHost，受 WPF 的 airspace 限制：子 HWND 永远盖在所有 WPF 内容之上，
+            z-order 与 XAML 先后顺序都无效。所以它初始必须是折叠的，导航成功后才显式置回 Visible，
+            否则这块白底会盖住 StatusText，"正在启动…" 与后续所有失败提示都画不出来。
+        -->
+        <Grid x:Name="WebViewHost" />
+        <TextBlock x:Name="StatusText"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   TextWrapping="Wrap"
+                   Text="正在启动…" />
+    </Grid>
+</UserControl>

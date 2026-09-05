@@ -1,0 +1,56 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <!-- DisplayName 会原样成为安装目录名（Extensions\<Publisher>\<DisplayName>\<Version>）。
+         2026-08-16 那次「装完完全不生效」修好时，SKU 列表与 DisplayName 是一起改的，
+         两个变量没分开验证过，所以「空格会不会坏」至今没有干净的结论。
+         改这里必须装完亲自确认 pkgdef 合进了私有注册表——不合并时扩展看似装上了，
+         菜单和工具窗口全不出现，而 VS 一声不吭。非 ASCII 仍然不要用。 -->
+    <Identity Id="AgentExtension.3bf1b394-980f-40c1-b4ea-495e604814b3" Version="1.1.11" Language="zh-CN" Publisher="Steven Skywalker" />
+    <DisplayName>Claude Code Extend</DisplayName>
+    <!-- 市场搜索结果里显示的就是这一句，与英文说明页配套，故用英文。 -->
+    <Description>Drive Claude Code from a native Visual Studio panel: streaming chat, colored diffs, command completion, and multiple sessions side by side — no embedded terminal.</Description>
+    <!-- 以下四项只给市场页面看，VS 本地安装用不到。
+         路径相对 VSIX 根目录，文件必须在 csproj 里标 IncludeInVSIX，否则打不进包。
+         顺序不能调：schema 是 sequence，License 必须排在 Icon 前面，错位会直接构建失败。 -->
+    <License>LICENSE.txt</License>
+    <Icon>Resources\icon.png</Icon>
+    <PreviewImage>Resources\preview.png</PreviewImage>
+    <Tags>claude;claude code;ai;agent;assistant;chat;webview</Tags>
+  </Metadata>
+  <!--
+    必须逐个 SKU 列出。只写 Community 时，VSIXInstaller 在 Professional 上会直接拒绝安装，
+    报 NoApplicableSKUsException「此扩展不能安装在任何当前安装的产品上」——
+    Community 并不是「最低档因而向上通用」的意思，它就是一个具体 SKU。
+    版本上界 19.0 覆盖 VS 2022(17.x) 与 VS 2026(18.x)。
+  -->
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 19.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 19.0)">
+      <ProductArchitecture>arm64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Pro" Version="[17.0, 19.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Pro" Version="[17.0, 19.0)">
+      <ProductArchitecture>arm64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 19.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 19.0)">
+      <ProductArchitecture>arm64</ProductArchitecture>
+    </InstallationTarget>
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.5,)" />
+  </Dependencies>
+  <Prerequisites>
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0, 19.0)" DisplayName="Visual Studio core editor" />
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+  </Assets>
+</PackageManifest>

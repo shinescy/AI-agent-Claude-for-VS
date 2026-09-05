@@ -1,0 +1,176 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>14</LangVersion>
+    <UseWPF>true</UseWPF>
+
+    <!-- VSIX settings -->
+    <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+
+    <!-- 传递依赖里的 SourceGear.sqlite3 不支持 AnyCPU；SDK 默认会把 Platform 设成 AnyCPU，
+         这里覆盖成 x64。这个 Platform 只用来选还原/输出路径。 -->
+    <Platform Condition="'$(Platform)' == '' or '$(Platform)' == 'AnyCPU'">x64</Platform>
+
+    <!--
+      但**产出的程序集必须是 AnyCPU（MSIL）**，所以显式把 PlatformTarget 拨回来。
+
+      为什么：上面那条注释原本写的理由是「VS 18 本身是 64 位进程」——这句话成立，
+      但不足以推出 x64。本机的 devenv.exe 是 **ARM64**，而 ARM64 进程加载不了 x64 程序集，
+      于是包加载时抛 BadImageFormatException（"试图加载格式不正确的程序"）。
+
+      这个故障的表现极具迷惑性：构建全绿、VSIX 打得出来、装得进去、文件哈希也对，
+      只有工具窗打不开，而 VS 界面上什么都不说——错误只写在 ActivityLog 里，
+      且那个日志要等 VS 退出才落盘。2026-08-20 实测踩到。
+
+      MSIL 由 JIT 编译成宿主的架构，x64 与 ARM64 的 VS 都能加载，是唯一不用押注宿主架构的选择。
+    -->
+    <PlatformTarget>AnyCPU</PlatformTarget>
+  </PropertyGroup>
+  <PropertyGroup>
+    <VSSDKTargetPlatformRegRootSuffix>Exp</VSSDKTargetPlatformRegRootSuffix>
+    <!--
+      F5 / 在 VS 里生成时**不**走 SDK 的部署。
+      原先这里是 Condition="'$(BuildingInsideVisualStudio)' == 'true'">true，于是 F5 会执行
+      DeployVsixExtensionFiles，而它最后一步 EnableExtension 在本机恒报
+      VSSDK1031「扩展未安装」——实测连「已经装好且正在运行」的那份都找不到（见 spec §12.1.18）。
+      构建于是在部署阶段失败，实验实例根本起不来，表现就是「按 F5 没反应」。
+      现在 F5 只做「构建 + 启动实验实例并附加调试器」；装扩展由 VSIXInstaller 负责
+      （docs/memory/exp-hive-deployment.md 的约定），下面那条警告会提醒这次构建没被部署。
+    -->
+    <DeployExtension>false</DeployExtension>
+    <StartAction>Program</StartAction>
+    <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
+    <StartArguments>/rootsuffix Exp</StartArguments>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectCapability Include="CreateVsixContainer" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- net472 SDK-style 项目不会自动带上这些框架程序集引用，需显式声明。 -->
+    <Reference Include="System.Design" />
+    <!-- ToolWindowPane.PreProcessMessage 的参数类型是 System.Windows.Forms.Message。 -->
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
+    <PackageReference Include="System.Text.Json" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+  </ItemGroup>
+  <ItemGroup>
+    <VSCTCompile Include="AgentExtensionPackage.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+
+    <!-- 菜单数据的落脚容器。没有它，VSSDK 会用内置 Empty.resx 顶上，
+         容器名变成 _EmptyResource，而 VS 只认 VSPackage —— 菜单数据进了 dll 却找不到，
+         全程不报错也不警告。详见 VSPackage.resx 里的说明。 -->
+    <!-- 用 Update 而非 Include：SDK-style 项目已自动收录目录下的 .resx，
+         再 Include 一次会报 NETSDK1022 重复项。Update 只是给已有项补元数据。 -->
+    <EmbeddedResource Update="VSPackage.resx">
+      <MergeWithCTO>true</MergeWithCTO>
+      <ManifestResourceName>VSPackage</ManifestResourceName>
+      <GenerateSource>false</GenerateSource>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="webview\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <!-- 市场页面用的图标、预览图与许可证。manifest 里按这里的 Link 路径引用，
+       两边对不上时 VSIX 照样打得出来，只是上传后图片空着——本地跑不出这个错。 -->
+  <ItemGroup>
+    <Content Include="Resources\icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="Resources\preview.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\LICENSE.txt">
+      <Link>LICENSE.txt</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    在 VS 里生成时提醒一句：这次构建没有装进实验配置单元。
+    不加这句的话 F5 会安静地拿「上次装进 hive 的那份」跑起来，改了代码却看不到变化——
+    本仓库已经被同类问题坑过一轮（spec §12.1.16 那次是 VSIX 里的前端旧一代）。
+  -->
+  <Target Name="WarnDeploySkipped" AfterTargets="Build" Condition="'$(BuildingInsideVisualStudio)' == 'true'">
+    <Warning Code="AGENTEXT001"
+             Text="F5 / 生成不会部署扩展：实验实例里跑的是上次装进 hive 的那份。要把这次构建装进去，先关掉实验实例再执行 VSIXInstaller.exe /quiet /rootSuffix:Exp &quot;$(TargetDir)AgentExtension.vsix&quot;（详见 docs/memory/exp-hive-deployment.md）。" />
+  </Target>
+
+  <!--
+    Release 构建前端产物；Debug 不自动构建，走 dev server 更快。
+
+    挂 BeforeBuild 而不是 Build：Build 依赖 CoreBuild，而打包 VSIX 就在 CoreBuild 里，
+    挂在 Build 上会在**打包之后**才构建前端——VSIX 里于是永远是上一代的 index.js。
+    表现极阴：构建全绿、安装 exit=0、面板也能开，但行为停在上一次构建，
+    改完前端装上去看着像没生效。（2026-08-19 实测：vsix 15:20:25，而 index.js 15:20:37。）
+  -->
+  <Target Name="BuildWebFrontend" BeforeTargets="BeforeBuild" Condition="'$(Configuration)' == 'Release'">
+    <!--
+      **先清，且必须清在 npm 之前**：通配是按磁盘上现有文件展开的，
+      等 vite 的 emptyOutDir 把上一批哈希文件删掉之后再 Remove，就什么也匹配不到了，
+      那些指向已删文件的 Content 项会留到复制阶段报 MSB3030「找不到该文件」。
+    -->
+    <ItemGroup>
+      <Content Remove="webview\**\*" />
+    </ItemGroup>
+
+    <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="..\AgentExtension.Web" />
+    <Exec Command="npm run build" WorkingDirectory="..\AgentExtension.Web" />
+
+    <!--
+      **先清后收**，两件事都要做：
+
+      收——Content 的通配是工程求值时展开的，本次构建新生成的文件不在里面。
+      清——文件名带内容哈希之后，求值时收进来的是**上一次**那批哈希名，
+      而 vite 的 emptyOutDir 已经把它们删了。留着它们会让复制阶段直接报
+      MSB3030「找不到该文件」，构建失败。
+
+      （文件名之所以带哈希：页面走 https:// 虚拟主机加载，HTTP 缓存语义完整适用，
+      固定名字会让 WebView2 一直拿旧 bundle。见 AgentChatControl 里 GetBuildStamp 的注释。）
+    -->
+    <ItemGroup>
+      <Content Include="webview\**\*">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+  <!--
+    打完包顺手放一份到仓库根的 dist\，文件名带上版本号。
+
+    默认那份埋在 AgentExtension\bin\Release\net472\ 里，名字还固定叫
+    AgentExtension.vsix——要发给别人时既难找，也看不出是哪一版；同目录下
+    还躺着一份 Debug 的同名包，拿错了不会有任何提示。
+
+    版本号从清单里现读，不另外维护一处：两处版本对不上，装进去的和以为装的
+    就是两回事，而 VSIX 只认版本号——同号覆盖装完毫无差别，降级则直接报
+    exit 1001。只在 Release 下做：Debug 包带 pdb，体积三倍，不该冒充发布产物。
+  -->
+  <Target Name="CopyVsixToDist" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <XmlPeek XmlInputPath="$(MSBuildProjectDirectory)\source.extension.vsixmanifest"
+             Query="/x:PackageManifest/x:Metadata/x:Identity/@Version"
+             Namespaces="&lt;Namespace Prefix='x' Uri='http://schemas.microsoft.com/developer/vsx-schema/2011' /&gt;">
+      <Output TaskParameter="Result" PropertyName="VsixIdentityVersion" />
+    </XmlPeek>
+
+    <Copy SourceFiles="$(OutDir)$(TargetName).vsix"
+          DestinationFiles="$(MSBuildProjectDirectory)\..\dist\AgentExtension-$(VsixIdentityVersion).vsix" />
+
+    <Message Importance="high"
+             Text="打好的包：$(MSBuildProjectDirectory)\..\dist\AgentExtension-$(VsixIdentityVersion).vsix" />
+  </Target>
+</Project>

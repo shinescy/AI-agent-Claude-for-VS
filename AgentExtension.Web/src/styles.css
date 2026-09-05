@@ -1,0 +1,2488 @@
+﻿/*
+ * 颜色跟随 VS，排版自成一套。
+ * 带 --vs- 前缀的会被宿主用当前 VS 主题覆盖；这里的值只是宿主还没下发时的兜底。
+ */
+/* 深色兜底。宿主一下发主题就被覆盖（宿主写的是根元素的内联 style，优先级更高）；
+   系统处于浅色且宿主还没说话时，由下面那段 prefers-color-scheme 接管。 */
+:root {
+  --vs-background: #1e1e1e;
+  --vs-foreground: #d4d4d4;
+  --vs-border: #3f3f46;
+  --vs-accent: #0078d4;
+  /* 压在强调色**上面**的文字色。宿主会按实际强调色的明暗下发黑或白：
+     此前这几处写死 #fff，遇到浅色强调色（VS 蓝色主题的 AccentMedium 是 #CFD6E5 那种淡色）
+     就成了白底白字。 */
+  --vs-accent-text: #ffffff;
+  --vs-background-alt: #252526;
+
+  /* 语义色：深色底上的取值（默认） */
+  --color-error: #f48771;
+  --color-added: #6a9955;
+  --color-warning: #d7a03c;
+
+  /* 叠加层（悬停、次级背景）：深色底上用白色提亮 */
+  --overlay-weak: rgba(255, 255, 255, 0.04);
+  --overlay: rgba(255, 255, 255, 0.05);
+  --overlay-strong: rgba(255, 255, 255, 0.08);
+
+  /* 排版 token：不跟随 VS，由前端自己决定 */
+  --font-ui: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
+  --font-code: 'Cascadia Code', Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --radius: 6px;
+}
+
+/*
+ * 浅色主题。两处必须改，否则界面在白底上会出问题：
+ * 1. 语义色要压深——同一个红在深色底上清晰，放白底上刺眼且对比度不足
+ * 2. 叠加层要改成黑色——白色叠加在白底上等于不可见，悬停反馈会整个消失
+ */
+:root[data-theme='light'] {
+  --color-error: #b91c1c;
+  --color-added: #15803d;
+  --color-warning: #a16207;
+
+  --overlay-weak: rgba(0, 0, 0, 0.03);
+  --overlay: rgba(0, 0, 0, 0.05);
+  --overlay-strong: rgba(0, 0, 0, 0.08);
+}
+
+/*
+ * 宿主还没下发主题时的兜底：跟随系统的明暗，而不是一律按深色渲染。
+ * VS 的主题本身可以设成「跟随系统」，深浅两版都要能看；上面那套 :root 默认值是深色的，
+ * 系统处于浅色时会先闪一下深色界面，而在浏览器里跑（npm run dev）则是整段时间都错。
+ *
+ * 只在 :root:not([data-theme]) 下生效——一旦宿主报了 scheme，就以宿主为准：
+ * 系统浅色而 VS 用深色主题是常见组合，那时必须听 VS 的。
+ */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --vs-background: #f5f5f5;
+    --vs-foreground: #1e1e1e;
+    --vs-border: #cccedb;
+    --vs-accent: #0066b8;
+    --vs-accent-text: #ffffff;
+    --vs-background-alt: #e9e9e9;
+
+    --color-error: #b91c1c;
+    --color-added: #15803d;
+    --color-warning: #a16207;
+
+    --overlay-weak: rgba(0, 0, 0, 0.03);
+    --overlay: rgba(0, 0, 0, 0.05);
+    --overlay-strong: rgba(0, 0, 0, 0.08);
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* 用户在状态栏里设的字体/字号/颜色写成 --user-* 变量挂在根元素上。
+   这里用 var(--user-x, 默认值) 接住：没设过时属性根本不存在，回退值生效；
+   设过就覆盖 VS 主题给的默认。注意别给 --user-* 留空串——那样回退不会触发。 */
+body {
+  margin: 0;
+  background: var(--vs-background);
+  color: var(--user-text-color, var(--vs-foreground));
+  font-family: var(--user-font-family, var(--font-ui));
+  font-size: var(--user-font-size, 13px);
+  line-height: 1.6;
+}
+
+/* overflow: hidden —— 顶部/底部两条新栏加进来之后，任何一处内容超宽都会让整页
+   出现横向滚动条，而在窄面板里横向滚动等于看不见。溢出一律由各栏内部自己处理。 */
+.app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ==================== 额度用量条（窗口顶部） ====================
+   订阅制下这才是有意义的用量指标，所以给它最显眼的位置。
+   一行放不下时换行而不是横向溢出——窄面板里横向滚动等于看不见。 */
+
+.usage-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--vs-border);
+  background: var(--vs-background-alt);
+  font-size: 11px;
+}
+
+.usage-bar-empty {
+  opacity: 0.5;
+}
+
+.usage-bar-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.usage-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.usage-item-label { opacity: 0.7; }
+
+/* 细条形进度：数字之外再给一个能扫一眼判断的形状。
+   宽度固定，不随文字长度变，否则几行之间对不齐。 */
+.usage-item-bar {
+  display: inline-block;
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--overlay-strong);
+  overflow: hidden;
+}
+
+.usage-item-fill {
+  display: block;
+  height: 100%;
+  background: var(--vs-accent);
+}
+
+.usage-item-percent {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* 倒计时用等宽数字：不然每秒跳动时整行都在左右抖。 */
+.usage-item-remaining {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-item-loud .usage-item-fill { background: var(--color-warning); }
+.usage-item-loud .usage-item-percent { color: var(--color-warning); }
+
+.usage-bar-refresh {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  font-size: 13px;
+}
+
+.usage-bar-refresh:hover:not(:disabled) { opacity: 1; }
+.usage-bar-refresh:disabled { opacity: 0.25; cursor: default; }
+
+/* ==================== 会话信息条（输入框底部） ==================== */
+
+.session-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--vs-border);
+  font-size: 11px;
+  min-width: 0;
+  /* 不给整条设 opacity：这里放着品牌与型号两个可交互控件，
+     父级的 opacity 子级还不回来，控件会看着像被禁用了。淡化只加在文字项上。 */
+}
+
+/* 品牌 / 型号。文字项要淡、控件要清楚，所以两者分开设。 */
+.session-bar-control {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-bar-hint { opacity: 0.45; }
+
+/* 每一项都可能很长（尤其路径），统一允许省略，且不把兄弟项挤没。 */
+.session-bar-item {
+  opacity: 0.75;
+  /* min-width: 0 缺了就不会收缩：flex 项的 min-width 默认 auto（= 内容宽度），
+     长路径会把整条栏撑宽，进而让整页出现横向滚动条。 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-bar-sep { opacity: 0.4; }
+.session-bar-spacer { flex: 1; }
+
+.session-bar-more {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--vs-accent);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+
+.session-bar-more:hover { text-decoration: underline; }
+
+/* ==================== status 面板 ==================== */
+
+.status-panel { padding: var(--space-3); overflow-y: auto; }
+
+.status-panel-section { margin-bottom: var(--space-3); }
+
+.status-panel-section-title {
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+  opacity: 0.85;
+}
+
+.status-panel-field {
+  display: flex;
+  gap: var(--space-2);
+  padding: 1px 0;
+}
+
+.status-panel-field-label {
+  flex: 0 0 96px;
+  opacity: 0.6;
+}
+
+.status-panel-field-value {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-code);
+  word-break: break-all;
+}
+
+/* 「未提供」压淡：它是「没有这个值」，不是值本身。 */
+.status-panel-field-missing { opacity: 0.45; font-family: inherit; }
+
+.status-panel-usage {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: 1px 0;
+}
+
+.status-panel-usage-label { flex: 1; min-width: 0; }
+.status-panel-usage-percent { font-weight: 600; font-variant-numeric: tabular-nums; }
+.status-panel-usage-reset { opacity: 0.6; }
+
+/* 折叠标题本身是按钮：长列表默认收起，数量写在标题上，不展开也知道有没有。 */
+.status-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  opacity: 0.85;
+}
+
+.status-panel-toggle:hover { opacity: 1; }
+.status-panel-caret { flex-shrink: 0; opacity: 0.6; }
+
+.status-panel-count {
+  margin-left: auto;
+  font-weight: 400;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-panel-list {
+  margin: 0 0 0 var(--space-4);
+  padding: 0;
+  list-style: disc;
+  font-family: var(--font-code);
+  font-size: 0.95em;
+}
+
+.status-panel-none { opacity: 0.45; padding-left: var(--space-4); }
+
+/* CLI 原文靠缩进表达层级，必须 pre-wrap 保住行首空白。 */
+.status-panel-raw {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  background: var(--overlay-weak);
+  border-radius: var(--radius);
+  font-family: var(--font-code);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ==================== 转录区 ====================
+   设计取向：四类块靠留白与左边界线区分，不靠堆叠边框和背景色——
+   一屏都是方框和底色只会显得廉价，真正长会话里读起来也累。 */
+
+.transcript {
+  flex: 1;
+  /* min-height: 0 是必须的：flex 项默认 min-height: auto，内容一多就不肯收缩，
+     会把顶部/底部那两条栏挤出可视区。真机上的表现是底部那条只露出半行。 */
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+}
+
+.block {
+  margin-bottom: var(--space-4);
+}
+
+.block-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.block-user {
+  border-left: 2px solid var(--vs-accent);
+  padding-left: var(--space-3);
+  opacity: 0.92;
+}
+
+/* ---- 轮次头：滚到哪一轮，就把那一轮的问题钉在顶上 ----
+   定位全交给 position:sticky，没有任何跟着滚动跑的 JS。三条约束缺一不可：
+   1. 每一轮包一层 .turn——sticky 只在同一个包含块内生效，平铺时所有头会挤在
+      顶部互相叠着，而不是轮流交接；
+   2. 高度用 em 并配一个等值的负 margin-bottom——**不占位**，整条浮在下面的块上面。
+      占位的话每条用户消息上面都会凭空多出一条空隙；
+   3. 背景必须是不透明的实色——底下的正文会从它身下滚过去，透一点都读不了。 */
+.turn-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 1.7em;
+  margin-bottom: -1.7em;
+}
+
+/* 原件还在屏幕上时隐形：否则同一句话会在同一个位置画两遍。
+   这个开关由 IntersectionObserver 拨，见 Transcript.tsx 的 TurnSection。 */
+.turn-head:not(.is-stuck) {
+  visibility: hidden;
+}
+
+.turn-anchor {
+  height: 0;
+}
+
+.pinned-turn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 1.7em;
+  padding: 0 var(--space-2);
+  border: none;
+  border-left: 2px solid var(--vs-accent);
+  border-bottom: 1px solid var(--vs-border);
+  background: var(--vs-background);
+  color: var(--vs-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pinned-turn:hover {
+  background: var(--overlay-weak);
+}
+
+.pinned-turn-mark {
+  color: var(--vs-accent);
+  flex: none;
+}
+
+/* 单行 + 省略号。钉住的东西必须是固定高度的，长消息在这儿换行会吃掉半屏；
+   完整原文挂在 title 上（见 PinnedTurnBar）。 */
+.pinned-turn-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.75;
+}
+
+.block-assistant {
+  padding-left: calc(var(--space-3) + 2px);
+}
+
+.block-thinking {
+  padding-left: calc(var(--space-3) + 2px);
+}
+
+.block-tool {
+  padding-left: calc(var(--space-3) + 2px);
+}
+
+.block-error {
+  border-left: 2px solid var(--color-error);
+  padding-left: var(--space-3);
+  color: var(--color-error);
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.block-error-icon {
+  flex-shrink: 0;
+}
+
+/* 中性系统提示。与错误块共用布局但不用错误色——
+   「已切换模式/已重启会话」不是坏消息，染成红色只会让人以为出了事。 */
+.block-notice {
+  border-left: 2px solid var(--vs-accent);
+  padding-left: var(--space-3);
+  opacity: 0.75;
+  font-size: 12px;
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.block-notice-icon {
+  flex-shrink: 0;
+  color: var(--vs-accent);
+}
+
+/* hook 活动：终端里看得见，这里也保留，但压到一行且很淡 */
+.block-hook {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: 11px;
+  opacity: 0.45;
+  padding-left: calc(var(--space-3) + 2px);
+}
+
+.block-hook-icon { flex-shrink: 0; }
+
+/* 未识别的原始行：必须可见（丢了就等于面板比终端少东西且无迹象），
+   但多为协议细节，默认折叠免得挤掉真正的对话内容 */
+.block-raw {
+  font-size: 11px;
+  opacity: 0.6;
+  padding-left: calc(var(--space-3) + 2px);
+}
+
+.block-raw-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.block-raw-header:hover { opacity: 1; }
+
+.block-raw-caret { flex-shrink: 0; }
+
+.block-raw-label {
+  font-family: var(--font-code);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-raw-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  border: 1px solid var(--vs-border);
+  border-radius: 2px;
+  padding: 0 3px;
+  opacity: 0.8;
+}
+
+.block-raw-body {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  background: var(--overlay-weak);
+  border-radius: var(--radius);
+  font-family: var(--font-code);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.block-turnend {
+  font-size: 11px;
+  opacity: 0.55;
+  padding-left: calc(var(--space-3) + 2px);
+  margin-bottom: var(--space-3);
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.turnend-sep { opacity: 0.6; }
+.turnend-interrupted { color: var(--color-warning); }
+.turnend-denied { color: var(--color-error); }
+
+/* ==================== markdown 正文 ==================== */
+
+.markdown-body {
+  font-family: var(--user-font-family, var(--font-ui));
+}
+
+/* 纯文本回复原样显示。/usage 这类命令靠换行与行首缩进表达层级，
+   过 markdown 会把缩进吃掉，这里用 pre-wrap 完整保住空白，与终端一致。
+   仍然自动换行，免得窄面板里横向溢出。 */
+.plain-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--user-font-family, var(--font-ui));
+}
+
+.markdown-body :first-child { margin-top: 0; }
+.markdown-body :last-child { margin-bottom: 0; }
+
+.markdown-body p { margin: 0 0 var(--space-2); }
+
+.markdown-body code {
+  font-family: var(--font-code);
+  font-size: 12px;
+  background: var(--overlay-strong);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.markdown-body pre {
+  font-family: var(--font-code);
+  font-size: 12px;
+  overflow-x: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--overlay-weak);
+  margin: var(--space-2) 0;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+/* shiki 高亮替换后自带内联背景色，撑满宽度即可，其余交给 shiki 的 style 属性。 */
+.markdown-body pre.shiki {
+  background: var(--overlay-weak) !important;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  margin: var(--space-2) 0;
+}
+
+.markdown-body a { color: var(--vs-accent); }
+
+/* 文件位置链接：等宽字体让它读起来像代码引用而不是普通超链接 */
+.file-ref {
+  font-family: var(--font-code);
+  font-size: 0.95em;
+  color: var(--vs-accent);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  cursor: pointer;
+}
+
+.file-ref:hover {
+  border-bottom-style: solid;
+  background: var(--overlay-weak);
+}
+
+.markdown-body ul, .markdown-body ol {
+  margin: 0 0 var(--space-2);
+  padding-left: 1.4em;
+}
+
+.markdown-body blockquote {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--vs-border);
+  opacity: 0.85;
+}
+
+/* ---- 标题 ----
+   浏览器默认的 h1/h2 在这么窄的面板里过大、上下留白也过多。
+   /context、/usage 这类内置命令的输出全是「标题 + 表格」，不管它们就跟终端里差得很远。
+   字号按面板正文缩放（em 而非 px），跟随状态栏里的字号设置。 */
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: var(--space-3) 0 var(--space-2);
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.markdown-body h1 { font-size: 1.35em; }
+.markdown-body h2 { font-size: 1.2em; }
+.markdown-body h3 { font-size: 1.08em; }
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 { font-size: 1em; opacity: 0.9; }
+
+/* 一级二级标题加一条下界线，长输出里便于扫读层级 */
+.markdown-body h1,
+.markdown-body h2 {
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--vs-border);
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--vs-border);
+  margin: var(--space-3) 0;
+}
+
+/* ---- 表格 ----
+   此前完全没有样式：列会挤成一团、没有分隔，和终端里的对齐表格毫无相似之处。
+   宽表格在窄面板里必须能横向滚动，否则会把整个转录撑宽。 */
+
+.markdown-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: var(--space-2) 0;
+  font-size: 0.95em;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--vs-border);
+  padding: 2px var(--space-2);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body th {
+  background: var(--overlay);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 隔行浅底：列多时不容易串行 */
+.markdown-body tbody tr:nth-child(even) {
+  background: var(--overlay-weak);
+}
+
+/* 数字列右对齐更好比对。markdown-it 会把 |---:| 翻成 text-align:right 的内联样式，
+   这里只是保证等宽，免得数字位数不同时看起来参差。 */
+.markdown-body td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== 思考块 ==================== */
+
+.thinking-block-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.55;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.thinking-block-header:hover { opacity: 0.8; }
+
+.thinking-block-caret {
+  font-size: 10px;
+  width: 1em;
+  display: inline-block;
+}
+
+.thinking-block-text {
+  margin-top: var(--space-1);
+  font-size: 12px;
+  opacity: 0.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ==================== 工具卡片 ====================
+   折叠态就是一行文字，靠 hover 的轻微背景变化提示可点，
+   展开后的内容（diff / 结果）也不额外套边框。 */
+
+.tool-card {
+  font-size: 12px;
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  margin-left: calc(var(--space-2) * -1);
+  border-radius: var(--radius);
+}
+
+.tool-card-header:hover {
+  background: var(--overlay);
+}
+
+.tool-card-icon { opacity: 0.8; }
+
+.tool-card-title {
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.tool-card-detail {
+  font-family: var(--font-code);
+  opacity: 0.65;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-card-running {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.tool-card-caret {
+  margin-left: auto;
+  opacity: 0.5;
+  font-size: 10px;
+}
+
+.tool-card-error .tool-card-title,
+.tool-card-error .tool-card-icon {
+  color: var(--color-error);
+}
+
+.tool-card-body {
+  margin-top: var(--space-1);
+  padding-left: var(--space-4);
+}
+
+.tool-card-result {
+  font-family: var(--font-code);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.85;
+  margin: var(--space-1) 0 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ==================== diff 视图 ==================== */
+
+.diff-view {
+  font-family: var(--font-code);
+  font-size: 12px;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.diff-stat {
+  display: flex;
+  gap: var(--space-2);
+  opacity: 0.7;
+  margin-bottom: var(--space-1);
+}
+
+.diff-stat-add { color: var(--color-added); }
+.diff-stat-remove { color: var(--color-error); }
+
+.diff-body {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.diff-line {
+  display: flex;
+  gap: var(--space-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0 var(--space-2);
+}
+
+.diff-line-add { background: rgba(106, 153, 85, 0.15); }
+.diff-line-remove { background: rgba(244, 135, 113, 0.15); }
+
+.diff-marker {
+  flex-shrink: 0;
+  width: 1em;
+  opacity: 0.7;
+}
+
+.diff-line-add .diff-marker { color: var(--color-added); }
+.diff-line-remove .diff-marker { color: var(--color-error); }
+
+/* ==================== 选项状态栏 ====================
+   取代了原先那条整行的放权提示。风险提示压缩成权限项旁的一个图标——
+   它描述的是常态，占满一行的价值不如把位置让给可操作的选项。
+   状态栏本身保持低对比度：它是常驻元素，抢眼只会消耗注意力。 */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  /* 必须换行。这一栏的控件加起来比窄面板宽（实测 460px 下放不下），
+     而 .app 是 overflow: hidden——不换行的话右侧的权限/语言/外观/⋯ 会被直接裁掉，
+     变成点不到。此前靠整页横向滚动"能看到"，那本身也是个毛病，
+     现在两个一起解决：整页不滚，这一栏自己换行。 */
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  /* 行间距刻意小于列间距：换行只在窄面板下发生，而那时纵向空间归转录用，
+     控件本身已经有 22px 的高度撑开层次，行距再加就是白占一行的位置。 */
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--vs-border);
+  background: var(--overlay-weak);
+  /* 12px 而非 11px。品牌与型号挪走之后这一行空出了将近一半，而 11px 是当初为了
+     「中英文都别换行」硬压出来的尺寸，比正文（13px）还小一号，选项名要凑近才看得清。
+     控件高度统一由 --status-control-h 给，各控件不再各自写一个高度——写散了就会
+     出现下拉比按钮矮 2px 这种对不齐的毛病。 */
+  font-size: 12px;
+  --status-control-h: 22px;
+}
+
+/* 换行之后那个撑开间距的弹性空隙会把配额/语言挤到下一行的最右端，
+   窄面板里反而更散。换行布局下不需要它。 */
+.status-bar .status-spacer { flex: 0 0 auto; }
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.status-caption {
+  opacity: 0.55;
+}
+
+/* init 回报的实际模型；与所选不同时才显示 */
+.status-actual {
+  opacity: 0.45;
+  font-family: var(--font-code);
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-spacer { flex: 1; }
+
+/* 字号与高度都随所在的栏走：工具栏声明了 --status-control-h（22px）与 12px 字号，
+   底部会话栏没声明，落到兜底的 21px / 11px——21px 正是它原来按内容自动算出的高度，
+   这样加这条规则不会顺手把那条栏改小。 */
+.status-select {
+  height: var(--status-control-h, 21px);
+  padding: 0 var(--space-1);
+  background: var(--vs-background);
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.status-select:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 完全放开的权限取值给出与其后果相称的视觉重量 */
+.status-select-danger {
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.status-warning {
+  /* 唯一的说明入口是它的悬停提示，所以字形要足够大、并给出一块与控件同高的悬停区域——
+     11px 的字符只有几个像素宽，鼠标得瞄准才碰得到。 */
+  display: inline-flex;
+  align-items: center;
+  height: var(--status-control-h, 21px);
+  padding: 0 2px;
+  font-size: 14px;
+  color: var(--color-warning);
+  opacity: 0.55;
+  cursor: help;
+  flex-shrink: 0;
+}
+
+.status-warning-loud {
+  opacity: 1;
+  color: var(--color-error);
+}
+
+/* 配额指示器。订阅制下这是真正有意义的用量数字，
+   但它是常驻信息而非告警，默认低调，超阈值才提高对比度。 */
+
+
+/* 用法串还原出来的选项。终端里这是个能点的选项框，这里也要能点。 */
+.command-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.command-option {
+  background: transparent;
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: 1px var(--space-2);
+  font-family: var(--font-code);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.command-option:hover {
+  background: var(--vs-accent);
+  border-color: var(--vs-accent);
+  color: var(--vs-accent-text, #fff);
+}
+
+/* 键盘停在哪一项必须看得见。整组只有一个 Tab 停靠点、其余靠方向键到达，
+   没有焦点圈的话按了方向键界面毫无变化，等于键盘操作不可用。
+   用 outline 而不是改 border：改 border 会让按钮宽度跳动，一路方向键过去整行都在抖。 */
+.command-option:focus-visible {
+  outline: 2px solid var(--vs-accent);
+  outline-offset: 1px;
+}
+
+/* 焦点进到选项组里时才出现的按键提示。低对比度：它是提示，不该跟选项抢注意力。 */
+.command-options-hint {
+  align-self: center;
+  margin-left: var(--space-2);
+  opacity: 0.55;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+/* 当前生效的那一项做出区分，免得点了个已经生效的 */
+.command-option-current {
+  border-color: var(--vs-accent);
+  color: var(--vs-accent);
+}
+
+/* ---- 强度滑轨 ----
+   档位有序（low → max），滑轨能表达次序，下拉不能。
+   刻度点与滑块用 left 百分比定位，再用 translateX(-50%) 让它们对准刻度中心，
+   否则最左最右两档会各偏出去半个点。 */
+
+.effort {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  /* 与右边的权限组之间比常规间距再宽一点：这里是分组边界，原先靠一条竖线表达，
+     换行时那条竖线会留在行尾变成孤儿，改用间距。 */
+  margin-right: var(--space-1);
+  flex-shrink: 0;
+}
+
+.effort-track {
+  position: relative;
+  /* 这是这一行里唯一要拖的控件，宽度直接决定拖得准不准：96px 下 7 档每档只隔 15px，
+     一格的误差就跳一档。120px 让每档间距回到 20px，接近可点击目标的下限。 */
+  width: 120px;
+  height: 18px;
+  /* 左右各留出滑块的伸出量。滑块按百分比定位并 margin-left 负半宽居中，停在首档/末档时
+     有半个身子（含描边约 9px）在轨道之外——不留这段空白，它就会压住左边的「强度」二字
+     和右边的档位名。放大滑块之后这个重叠一眼就能看出来。 */
+  margin: 0 9px;
+  cursor: pointer;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.effort-track:focus-visible {
+  outline: 1px solid var(--vs-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.effort-track-disabled { opacity: 0.45; cursor: default; }
+
+/* 轨道底线 */
+.effort-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+  background: var(--vs-border);
+  border-radius: 2px;
+}
+
+/* 已选部分的填充 */
+.effort-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+  background: var(--vs-accent);
+  border-radius: 2px;
+}
+
+/* 档位圆点。必须一眼看得见「能停在哪儿」——3px 的点会被填充线盖住，
+   等于没有刻度，用户不知道该拖到哪里。这里放大到 5px 并加一圈底色描边，
+   让它在轨道线和填充条之上都能分辨出来。 */
+.effort-notch {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--vs-background);
+  box-shadow: 0 0 0 1.5px var(--vs-border);
+}
+
+/* 已经过的档位跟着填充色走，一眼看出当前在第几档 */
+.effort-notch-on {
+  background: var(--vs-accent);
+  box-shadow: 0 0 0 1.5px var(--vs-accent);
+}
+
+.effort-thumb {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--vs-accent);
+  /* 两层描边：底色一圈把它从刻度点里托出来，再来一圈强调色勾边。
+     连外圈描边算进去实际直径 10+3×2=16px：轨道放宽到 120px 时跟着放大到 19px 显得太重，
+     它只是个位置指示，比刻度点明显一圈就够。 */
+  box-shadow: 0 0 0 2px var(--vs-background), 0 0 0 3px var(--vs-accent);
+}
+
+.effort-label {
+  min-width: 2.5em;
+  opacity: 0.75;
+}
+
+/* ---- 选项框 ----
+   不用原生 select：每一项都要带一句说明（「只在最难的任务上用」这类），
+   select 只能显示一行标签，说明塞进 title 等于没有。 */
+
+.picker { position: relative; flex-shrink: 0; }
+
+.picker-trigger {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  background: transparent;
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: 0 var(--space-1);
+  height: 18px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 18em;
+}
+
+.picker-trigger:hover:not(:disabled) { background: var(--overlay); }
+.picker-trigger:disabled { opacity: 0.45; cursor: default; }
+
+.picker-value {
+  font-family: var(--font-code);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-caret { opacity: 0.6; flex-shrink: 0; }
+
+/* 向上弹：状态栏贴着输入区，向下会被输入框挡住 */
+.picker-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 20;
+  max-height: 22em;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--vs-background-alt);
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  padding: var(--space-1);
+}
+
+.picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.picker-item:hover { background: var(--overlay); }
+.picker-item-current { background: var(--overlay-weak); }
+
+.picker-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+/* 固定宽度占位，让有无对勾的行左边界对齐 */
+.picker-item-mark {
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--vs-accent);
+}
+
+.picker-item-label { font-family: var(--font-code); }
+
+.picker-item-desc {
+  padding-left: calc(1em + var(--space-1));
+  font-size: 11px;
+  opacity: 0.6;
+  line-height: 1.35;
+}
+
+/* 「⋯」与「Aa」两个菜单入口。给 min-width 是为了让两者一样宽：
+   一个是三点、一个是两个字母，按内容撑出来的宽度差一截，并排看着像没对齐。 */
+.status-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: var(--status-control-h, 21px);
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.status-button:hover { background: var(--overlay); }
+
+/* ---- 外观面板 ---- */
+
+.status-appearance { position: relative; }
+
+/* 向上弹出：状态栏贴在输入区上方，向下会被输入框挡住 */
+.appearance-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 10;
+  min-width: 240px;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--vs-background-alt);
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+/* 贴左缘展开。默认的 right: 0 只在按钮靠窗口右侧时成立：按钮换行到行首时，
+   240px 宽的面板会整块伸到窗口左边，被 .app 的 overflow: hidden 裁掉——菜单看着只剩半截。
+   由 DropdownPanel 量过实际位置后决定加不加这个类，不靠猜宽度。 */
+.appearance-panel-left {
+  right: auto;
+  left: 0;
+}
+
+.appearance-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.appearance-label {
+  width: 2.6em;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.appearance-range { flex: 1; min-width: 0; }
+
+.appearance-value {
+  width: 3em;
+  text-align: right;
+  opacity: 0.6;
+  font-family: var(--font-code);
+}
+
+.appearance-color {
+  width: 28px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--vs-border);
+  background: transparent;
+  cursor: pointer;
+}
+
+.appearance-reset {
+  background: transparent;
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: 1px var(--space-2);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.appearance-reset:hover { background: var(--overlay); opacity: 1; }
+
+.appearance-reset-all { align-self: flex-end; }
+
+/* ---- CLI 子命令菜单 ---- */
+
+.subcommand-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--vs-foreground);
+  border: none;
+  border-radius: 3px;
+  padding: var(--space-1) var(--space-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.subcommand-item:hover { background: var(--overlay); }
+
+/* 只能去终端跑的那些：不禁用（点了要能看到引导），但视觉上区分开 */
+.subcommand-item-manual { opacity: 0.7; }
+
+.subcommand-tag {
+  font-size: 10px;
+  opacity: 0.7;
+  border: 1px solid var(--vs-border);
+  border-radius: 2px;
+  padding: 0 3px;
+  flex-shrink: 0;
+}
+
+.subcommand-guidance {
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border-left: 2px solid var(--vs-accent);
+  font-size: 11px;
+  opacity: 0.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ==================== 输入区 ==================== */
+
+.composer {
+  position: relative;
+  border-top: 1px solid var(--vs-border);
+  padding: var(--space-2) var(--space-4);
+}
+
+/* 附件缩略图：小而克制，够看清是哪张图即可 */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.composer-attachment {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.composer-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  padding: 0;
+  border: none;
+  border-bottom-left-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.composer-attachment-remove:hover {
+  background: var(--color-error);
+}
+
+.composer-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+
+/* 顶边拖拽把手：向上拖变高，符合面板从下往上堆叠的布局。
+   没用 CSS 原生 resize——它的把手固定在右下角，正好压在发送按钮上，
+   而且拖拽方向与这里的直觉相反。 */
+.composer-grip {
+  height: 5px;
+  margin: calc(var(--space-1) * -1) 0 var(--space-1);
+  cursor: ns-resize;
+  border-radius: 3px;
+  /* 默认不可见，悬停才显形：常驻一条横线会把输入区切得很碎 */
+  background: transparent;
+  transition: background 0.12s;
+  touch-action: none;
+}
+
+.composer-grip:hover,
+.composer-grip:active {
+  background: var(--vs-accent);
+  opacity: 0.5;
+}
+
+/* 只在「拼上提示词会让这条命令变成一句话」时出现的一行。
+   用警示底色而不是普通说明色：它代表「你正要做的事和你以为的不一样」，
+   混进说明色里会被扫过去当成噪音。 */
+.composer-warning {
+  padding: 4px 8px;
+  margin-bottom: var(--space-1);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, transparent);
+  font-size: 12px;
+}
+
+/* 「固定提示词」那一格。与「具体内容」那格并排堆在输入区里，
+   左边挂一个常驻的标签——两个长得一样的框叠在一起，光靠占位文字分不清，
+   而占位文字一开始打字就没了。 */
+.composer-prompt-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.composer-prompt-label {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: var(--overlay);
+  color: color-mix(in srgb, var(--vs-foreground) 60%, transparent);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* 默认比内容那格矮：它多数时候只有一两行，且长期占着位置。
+   拖过之后内联 height 会盖掉这里。 */
+.composer-prompt-textarea {
+  min-height: 2.4em;
+  max-height: 6em;
+}
+
+.composer-textarea {
+  flex: 1;
+  /* 关掉原生把手，高度改由 composer-grip 控制（内联 style 写具体值） */
+  resize: none;
+  min-height: 2.4em;
+  /* 未手动调整时的上限；一旦拖过，内联 height 会覆盖它 */
+  max-height: 10em;
+  background: var(--vs-background);
+  color: var(--user-text-color, var(--vs-foreground));
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  font-family: var(--user-font-family, var(--font-ui));
+  font-size: var(--user-font-size, 13px);
+}
+
+.composer-textarea:focus {
+  outline: none;
+  border-color: var(--vs-accent);
+}
+
+.composer-button {
+  border: 1px solid var(--vs-border);
+  background: var(--vs-accent);
+  color: var(--vs-accent-text, #fff);
+  border-radius: var(--radius);
+  padding: 0 var(--space-3);
+  height: 2.4em;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.composer-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.composer-button-stop {
+  background: var(--color-error);
+  border-color: var(--color-error);
+}
+
+/* slash 命令补全弹层：浮在输入框上方 */
+
+.slash-popup {
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: 100%;
+  margin-bottom: var(--space-1);
+  background: var(--vs-background);
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 10;
+  /* 滚动交给内部列表：条数标注要固定在底部，不能跟着滚走 */
+  display: flex;
+  flex-direction: column;
+  max-height: 18em;
+  overflow: hidden;
+}
+
+.slash-popup-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* 条数标注。列表远长于可视高度时，用户需要知道下面还有——
+   此前只渲染前 12 条且无任何提示，看起来像补全列表残缺。 */
+.slash-popup-footer {
+  flex-shrink: 0;
+  padding: 2px var(--space-3);
+  border-top: 1px solid var(--vs-border);
+  font-size: 10px;
+  opacity: 0.5;
+  display: flex;
+  gap: var(--space-1);
+  align-items: baseline;
+}
+
+/* 清单边界说明。窄面板下先让它被挤掉，条数本身更要紧。 */
+.slash-popup-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.slash-popup-item {
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-code);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.slash-popup-item-selected {
+  background: var(--vs-accent);
+  color: var(--vs-accent-text, #fff);
+}
+
+/* 本环境不可用的命令：标注而非隐藏。藏了用户会以为补全又残缺，
+   而这是管线本身的限制，说出来比让人反复试强。 */
+.slash-popup-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.slash-popup-item-blocked { opacity: 0.5; }
+
+.slash-popup-blocked-tag {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 0 3px;
+  opacity: 0.8;
+}
+
+/* ==================== 面板覆盖层 ====================
+   盖住转录而非内嵌进转录：插件列表这类是活状态，几分钟前的快照早就不对了，
+   留在转录历史里比不显示更误导。 */
+
+.panel-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--vs-background);
+}
+
+.panel-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  outline: none;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--vs-border);
+}
+
+.panel-title {
+  font-weight: 600;
+}
+
+.panel-header-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.panel-loading {
+  padding: var(--space-3);
+  opacity: 0.7;
+}
+
+.panel-error {
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-error);
+  background: var(--overlay-weak);
+  color: var(--color-error);
+}
+
+.panel-raw {
+  margin: var(--space-1) 0 0;
+  white-space: pre-wrap;
+  font-family: var(--font-code);
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+
+/* 无错误时也可能要显示 rawText（查询型动作的 stdout 本身就是结果），
+   不再嵌在 .panel-error 的红色左边线里，改用中性配色单独成块。 */
+.panel-raw-standalone {
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--overlay);
+  background: var(--overlay-weak);
+  color: inherit;
+}
+
+/* 插件面板的 tab 条。用下边框而不是整块底色标出当前项：
+   窄面板里整块底色会和列表的选中高亮撞在一起，分不清哪个是当前视图。 */
+.panel-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--overlay);
+}
+
+.panel-tab {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.panel-tab:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.panel-tab-active {
+  border-bottom-color: var(--vs-accent);
+  opacity: 1;
+  font-weight: 600;
+}
+
+.panel-tab:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* 顶部动作条：一个按钮 + 一句说明。说明不是装饰——
+   「更新」tab 里没有可更新清单是 CLI 的限制，不写出来会被当成功能缺失。 */
+.panel-actions-bar {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.panel-actions-note {
+  font-size: 0.85em;
+  opacity: 0.65;
+}
+
+/* 详情区里的停用说明。按钮为什么点不动，必须就地说清楚，
+   否则用户只会看到一个灰掉的按钮，无从判断是坏了还是不该点。 */
+.panel-detail-warning {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-error);
+  background: var(--overlay-weak);
+  font-size: 0.9em;
+}
+
+
+/* 输入不合法时的就地说明。灰掉的按钮不说明理由，用户只能猜。 */
+.panel-note-warning {
+  color: var(--color-error);
+}
+
+/* 不可撤销动作的确认按钮。 */
+.panel-action-danger {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+/* 「⋯」菜单里的分组标题。菜单里既有开原生面板的项，也有只能去终端跑的项，
+   不分组的话它们看起来是同一类东西，点了才发现行为完全不同。 */
+.subcommand-group-title {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 0.85em;
+  opacity: 0.6;
+  text-transform: none;
+}
+
+/* 「下面这份列表是旧的」。挂在错误块内部，跟着错误色走——
+   它说的正是「你现在看到的状态不可信」这件事。 */
+.panel-stale-note {
+  margin-top: var(--space-2);
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+
+/* 命令成功但没有输出。用中性配色：这不是错误，只是没话说，
+   但必须显示出来，否则整块正文是白的，看起来就是「点了没反应」。 */
+.panel-empty-output {
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--overlay);
+  background: var(--overlay-weak);
+  opacity: 0.8;
+}
+
+.panel-body {
+  flex: 1;
+  /* min-height:0 不可省：flex 项目的 min-height 默认是 auto，即「不得小于内容」。
+     内容自身高度又依赖容器（终端面板是 height:100%，xterm 还会按容器高度算行数），
+     于是形成正反馈——面板一路撑到窗口之外，用户看到的是一大片空白，
+     真正的内容被顶到可视区下面。实测终端面板会长到 1439px。 */
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ==================== 健康检查面板 ====================
+   doctor 是纯文本，靠行首缩进表达层级，pre-wrap 原样显示，不走 markdown。 */
+
+.panel-plain-text {
+  margin: 0;
+  padding: var(--space-3);
+  white-space: pre-wrap;
+  font-family: var(--font-code);
+}
+
+/* ==================== 插件面板 ====================
+   左侧列表 + 右侧详情动作的主从布局。 */
+
+/*
+ * 重启横幅与顶部全局动作条（插件面板的「市场」、MCP 面板的「新增远程服务器」）现在
+ * 是这个 flex 列容器的直接子项，排在 .panel-master-detail 前面，各自按内容撑开高度，
+ * 剩余空间整根交给 .panel-master-detail（flex:1）。
+ *
+ * 此前三者一起塞进 .panel-master-detail 这个 grid 里，行全是隐式 auto，
+ * align-content 默认 stretch 会把容器的剩余高度**平均分给全部 auto 行**——
+ * 横幅、动作条这两条本该只占一行文字高度的窄条，被硬摊到跟列表/详情同等的份额，
+ * 实测 600px 高的面板里动作条会占掉 242px，内容区反而只剩 307px。
+ * 挪出网格、改用 flex 主轴分配（非 flex 项目按内容高度、flex:1 项目吃剩余空间）
+ * 从根上避免这种按行数摊平的分配方式。
+ */
+.panel-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.panel-master-detail {
+  display: grid;
+  grid-template-columns: minmax(120px, 40%) 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+ * 左栏若还带一条搜索框（目前只有插件面板），搜索框与列表要装进同一个 flex 列容器里，
+ * 让它们作为整体占据网格的左列，右侧详情才能与这一整根左列对齐、等高。
+ * 右边框画在这个外层容器上，这样它才能贯穿搜索框与列表的整根高度；
+ * .panel-list 自己的右边框（供 MCP 面板独用，见下方注释）在这层嵌套里要关掉，
+ * 否则两条边框贴在一起会显得比其它分隔线粗一倍。
+ */
+.panel-list-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--vs-border);
+}
+
+.panel-search {
+  flex-shrink: 0;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--vs-border);
+}
+
+.panel-search input {
+  width: 100%;
+  background: var(--vs-background);
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: 12px;
+}
+
+.panel-search input:focus {
+  outline: none;
+  border-color: var(--vs-accent);
+}
+
+/* 「下个会话生效」提示：借用 panel-error 的左边线 + 弱底色写法，
+   但换成强调色而非错误色——这是常态提示，不是坏消息。 */
+.panel-restart-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--vs-accent);
+  background: var(--overlay-weak);
+  font-size: 12px;
+}
+
+.panel-restart-banner button {
+  background: transparent;
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: 1px var(--space-2);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.panel-restart-banner button:hover { background: var(--overlay); }
+
+.panel-list {
+  overflow: auto;
+  /* MCP 面板里 .panel-list 是网格的直接子项，没有 .panel-list-column 包一层，
+     这条右边框是列表与详情之间唯一的分隔线，必须留着。
+     插件面板里它嵌在 .panel-list-column 内，外层容器已经画了同一条边框，
+     下面的覆盖规则会关掉这条，避免叠成 2px 双线。 */
+  border-right: 1px solid var(--vs-border);
+  /* 只在 .panel-list-column 的 flex 上下文里生效（插件面板）：列表在搜索框之下吃满剩余高度。
+     在 MCP 面板里 .panel-list 是网格的直接子项，flex/min-height 对网格子项无意义，被忽略。 */
+  flex: 1;
+  min-height: 0;
+}
+
+/* 嵌在 .panel-list-column 里时（插件面板），右边框已经由外层容器给出，
+   这里关掉列表自己的那条，避免两条边框贴在一起显得比其它分隔线粗一倍。 */
+.panel-list-column > .panel-list {
+  border-right: none;
+}
+
+/* 空态：内容走 CSS 生成，不占真实 DOM 子节点——保持「items 为空时 listbox 无子节点」
+   这条既有断言不变，同时不给用户一片空白（设计 §7）。 */
+.panel-list:empty::after {
+  content: attr(data-empty-text);
+  display: block;
+  padding: var(--space-2);
+  opacity: 0.7;
+  font-size: 12px;
+}
+
+.panel-list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.panel-list-item:hover { background: var(--overlay); }
+
+.panel-list-item-selected { background: var(--overlay-weak); }
+
+/* 长插件名在窄列里必须省略号收尾，否则各自撑出横向滚动条。
+   flex:1 + min-width:0 是让省略号生效的必要条件——flex 子项默认 min-width:auto，
+   不设为 0 的话浏览器不会真的把它压窄到触发省略。 */
+.panel-list-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-dot-on { color: var(--color-added); }
+.panel-dot-off { opacity: 0.5; }
+
+.panel-detail {
+  padding: var(--space-3);
+  overflow: auto;
+}
+
+.panel-detail-title {
+  font-weight: 600;
+}
+
+.panel-detail-subtitle {
+  opacity: 0.7;
+  font-size: 12px;
+  margin-bottom: var(--space-2);
+}
+
+/* 市场条目的描述（PluginPanel selected.detail）：不补规则就走浏览器默认段落边距与字号，
+   与详情区其余部分（标题/副标题 12px、字段表 11px）不统一。 */
+.panel-detail-description {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.panel-fields dt {
+  opacity: 0.6;
+  font-size: 11px;
+  margin-top: var(--space-1);
+}
+
+.panel-fields dd {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-code);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.panel-actions button {
+  background: transparent;
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: 2px var(--space-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.panel-actions button:hover { background: var(--overlay); }
+
+/* ==================== MCP 面板 ====================
+   新增远程服务器表单：字段纵向排列，说明文字借用 subcommand-guidance
+   的左边线写法——它引导用户去终端配置 stdio，属于常态提示而非错误。 */
+
+.panel-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.panel-form label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.panel-form input {
+  background: var(--vs-background);
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: 12px;
+}
+
+.panel-form input:focus {
+  outline: none;
+  border-color: var(--vs-accent);
+}
+
+.panel-note {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  border-left: 2px solid var(--vs-accent);
+  font-size: 11px;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+
+.panel-note code {
+  font-family: var(--font-code);
+  background: var(--overlay-strong);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* ==================== 后台代理面板 ====================
+   只读列表，没有主从布局：agents 没有可操作的详情/动作。 */
+
+.panel-plain { padding: var(--space-2) var(--space-3); }
+/* 筛选项与「开新会话」逃生口同一行，两端对齐。目前只有会话历史面板用到。 */
+.panel-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.panel-filter { display: flex; gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); }
+.panel-empty { opacity: 0.7; padding: var(--space-2) 0; }
+.panel-row { display: flex; gap: var(--space-2); align-items: baseline; flex-wrap: wrap; padding: var(--space-1) 0; }
+.panel-row-title { font-weight: 600; }
+.panel-row-sub { opacity: 0.75; font-size: 0.9em; }
+.panel-row-status { opacity: 0.6; font-size: 0.85em; }
+.panel-row-session { opacity: 0.55; font-size: 0.8em; font-family: var(--font-code); }
+.panel-row-pid { opacity: 0.55; font-size: 0.8em; font-family: var(--font-code); }
+.panel-row-path { opacity: 0.55; font-size: 0.85em; margin-left: auto; }
+
+/* ==================== 会话历史 / 记忆 / 命令面板 ====================
+   三个面板都复用上面那套 panel-plain 行式布局，只补各自需要的列。
+   这三条命令（/resume /memory /help）在 CLI 那边都被拒，功能改由这里原生提供。 */
+
+/* 行内动作按钮（接回 / 开分支 / 打开）。与 .panel-actions button 同一套外观，
+   但那条选择器只作用于详情区里的按钮组，这里是列表行内的单个按钮。 */
+.panel-action {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--vs-foreground);
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  padding: 1px var(--space-2);
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.panel-action:hover { background: var(--overlay); }
+
+/* 面板顶部的一句说明。是常态提示而非坏消息，所以不用错误色。 */
+.panel-hint {
+  margin-bottom: var(--space-2);
+  opacity: 0.65;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+.panel-row-branch {
+  opacity: 0.7;
+  font-size: 0.8em;
+  font-family: var(--font-code);
+}
+
+.panel-row-size { opacity: 0.5; font-size: 0.8em; font-variant-numeric: tabular-nums; }
+
+/* 「当前会话」「本环境不可用」这类状态标签 */
+.panel-row-current { color: var(--vs-accent); font-size: 0.8em; }
+.panel-row-scope { opacity: 0.6; font-size: 0.8em; }
+
+/* 权限面板。
+   规则本身是机器语法（Bash(git commit:*) 之类），用等宽体，不然括号星号读不清。
+   种类只用颜色区分是不够的（色觉障碍 + VS 深浅主题对比度不同），所以文字本身就写「允许/拒绝」，
+   颜色只是加强。 */
+.permission-kind {
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  font-size: 0.8em;
+  opacity: 0.85;
+}
+
+.permission-kind-allow { color: var(--vs-ok); }
+.permission-kind-deny { color: var(--vs-error); }
+.permission-kind-ask { color: var(--vs-warning); }
+
+.permission-rule {
+  font-family: var(--font-code);
+  font-size: 0.9em;
+}
+
+/* 作用域那一行是一组规则的表头，给点上边距把两组分开 */
+.permission-scope-row { margin-top: var(--space-2); font-weight: 600; }
+
+.panel-row-error { color: var(--vs-error); font-size: 0.8em; }
+
+/* 设置文件面板的「已有配置段」。段名是机器语法，等宽体读起来省力；过长时省略而不挤没兄弟列。 */
+.settings-sections {
+  flex: 1;
+  min-width: 8em;
+  font-family: var(--font-code);
+  font-size: 0.85em;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 命令说明。允许它占满剩余宽度并在过长时省略，不把兄弟列挤没。 */
+.panel-row-desc {
+  flex: 1;
+  min-width: 8em;
+  opacity: 0.75;
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-row-hint {
+  opacity: 0.6;
+  font-size: 0.8em;
+  font-family: var(--font-code);
+}
+
+/* 已知在本环境用不了的命令：划掉但仍然列出来——藏起来的话，
+   用户会以为它压根不存在，转头去终端里找。 */
+.panel-row-struck { text-decoration: line-through; opacity: 0.55; }
+
+/* 命令面板的分组标题（内置 / 插件与技能） */
+.panel-group-title {
+  margin: var(--space-3) 0 var(--space-1);
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+/* 主视图（转录 / 终端）与输入框在两边之间来回换人时**只藏不卸**。
+   卸载的代价：终端连 xterm 的回滚缓冲一起 dispose，转录丢滚动位置，
+   两个输入框丢没发完的草稿。display:none 让 clientWidth 归零，
+   终端那边的 fit() 会自己跳过这一轮，切回来时 ResizeObserver 再叫一次。 */
+.is-hidden {
+  display: none !important;
+}
+
+/* 终端标签 —— 跑完整 TUI 的那一路 claude。 */
+
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+}
+
+/* 工具栏。终端的可视高度直接决定 TUI 能画几行，所以这一条要尽量矮：
+   按钮小号、说明压缩成一个挂 title 的标签，而不是占两行的说明块。 */
+.terminal-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminal-toolbar button {
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  background: var(--vs-button-background, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+.terminal-toolbar button:hover {
+  border-color: var(--vs-accent, #666);
+}
+
+.terminal-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.terminal-hint {
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--vs-foreground) 60%, transparent);
+  border-bottom: 1px dotted currentColor;
+  cursor: help;
+}
+
+/* 「栏里改了、终端还没应用」的提示条。
+   用警示底色而不是普通说明色：它代表一个**待办**——有个动作没做，
+   而普通说明只是背景信息，两者混色会让人扫过去当成噪音。 */
+.terminal-drift {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, transparent);
+  font-size: 12px;
+}
+
+.terminal-drift-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 终端本体这一块。提示条浮在它上面，所以它得是定位参照——挂在整个面板上的话，
+   提示条会飘到最顶上把工具栏盖掉。 */
+.terminal-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* **浮在终端上面，不占布局**。占位的话它一出现就把终端可用高度挤小，xterm 跟着重排、
+   TUI 收到 SIGWINCH 重画一整屏，消失时再来一遍——一条一闪而过的提示搅动整块屏幕。
+   pointer-events: none 不能少：它盖在终端上，不能把鼠标事件挡掉。 */
+.terminal-notice {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  pointer-events: none;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: var(--overlay-strong);
+  color: var(--vs-foreground);
+  font-size: 12px;
+}
+
+/* 终端上方那条「钉住的问题」。与提示条相反，它是常驻的，所以照常占位——
+   一直占着才不会在会话中途改变终端高度。 */
+.terminal-pinned {
+  flex: none;
+  height: 1.7em;
+}
+
+/* 终端要能缩：min-height 不给 0 的话，flex 子项会按内容撑开，
+   xterm 量到的高度只增不减，窗口拉小时行数不会跟着回来。 */
+.terminal-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terminal-exited {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  color: var(--vs-foreground);
+  font-size: 12px;
+}
+
+/* —— @ 引用徽标与文件预览 —— */
+
+.mention-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+}
+
+.mention-bar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  background: var(--overlay-weak);
+  color: var(--vs-foreground);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  /* 行内出现在用户消息里时，别把行高撑开。 */
+  vertical-align: baseline;
+}
+
+.mention-chip:hover {
+  background: var(--overlay-strong);
+}
+
+.mention-chip.is-active {
+  border-color: var(--vs-accent);
+}
+
+.mention-chip-icon {
+  color: var(--vs-accent);
+}
+
+.mention-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview {
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  background: var(--vs-background-alt);
+  overflow: hidden;
+}
+
+.file-preview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--vs-border);
+  background: var(--overlay-weak);
+  font-size: 12px;
+}
+
+.file-preview-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-code);
+}
+
+.file-preview-meta {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
+.file-preview-action {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--vs-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.file-preview-action:hover {
+  background: var(--overlay-strong);
+}
+
+/* 预览是「扫一眼」，不该把转录挤走：给一个固定的最大高度，超了自己滚。 */
+.file-preview-body {
+  max-height: 320px;
+  overflow: auto;
+  padding: 0 var(--space-2);
+}
+
+.file-preview-hint {
+  padding: var(--space-2) 0;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.file-preview-error {
+  padding: var(--space-2) 0;
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+.file-preview-image {
+  display: block;
+  max-width: 100%;
+  margin: var(--space-2) auto;
+}
+
+.composer-attach {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--vs-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--vs-foreground);
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.composer-attach:hover {
+  background: var(--overlay-strong);
+  border-color: var(--vs-accent);
+}
+
+/* tab 条 ---------------------------------------------------------------- */
+
+/* flex: 0 0 auto 与其余顶层子元素一致，不让它被压缩 */
+.tabstrip {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px 4px 0 4px;
+  overflow-x: auto;
+  background: var(--vs-background-alt);
+  border-bottom: 1px solid var(--vs-border);
+}
+
+.tabstrip-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.tabstrip-tab:hover {
+  background: var(--overlay);
+}
+
+.tabstrip-tab.is-active {
+  background: var(--overlay-strong);
+  border-color: var(--vs-border);
+}
+
+.tabstrip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabstrip-busy,
+.tabstrip-unread,
+.tabstrip-failed {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.tabstrip-busy {
+  background: var(--vs-accent, #4ec9b0);
+  animation: tabstrip-pulse 1.2s ease-in-out infinite;
+}
+
+.tabstrip-unread {
+  background: var(--vs-accent, #4ec9b0);
+}
+
+/* 崩了的 tab：颜色必须跟忙碌/未读的强调色区分开——三者都是同一个位置的小圆点，
+   仅靠 pulse 动画区分色盲不友好，也容易在小屏幕上被忽略。复用关闭按钮确认态
+   已经在用的错误色变量，图标语义与视觉一致。 */
+.tabstrip-failed {
+  background: var(--vs-error, #f14c4c);
+}
+
+@keyframes tabstrip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.tabstrip-close,
+.tabstrip-add {
+  flex: none;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.tabstrip-close:hover,
+.tabstrip-add:hover {
+  background: var(--overlay-strong);
+  border-radius: 2px;
+}
+
+/* 忙的 tab 第一次点关闭按钮进入的确认态：跑了半天的活儿误点一下就没了、
+   没法撤销，用颜色把这一下和平常的关闭分开。 */
+.tabstrip-close.is-confirming {
+  padding: 0 5px;
+  color: var(--vs-error, #f14c4c);
+  background: var(--overlay-strong);
+  border-radius: 2px;
+  font-size: 0.85em;
+}

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable"
+              xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <Extern href="stdidcmd.h"/>
+  <Extern href="vsshlids.h"/>
+
+  <Commands package="guidAgentExtensionPackage">
+    <Groups>
+      <!-- 挂在「视图」菜单本身，而不是「视图 → 其他窗口」下的 IDG_VS_WNDO_OTRWNDWS1。
+           后者在 VS 2026 上实测挂不上去：vsct 能编译、pkgdef 正常、无任何报错，
+           但菜单项就是不出现。IDM_VS_MENU_VIEW 是标准模板用的父级，稳定可靠。 -->
+      <Group guid="guidAgentExtensionCmdSet" id="MyMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_VIEW"/>
+      </Group>
+
+      <!-- 代码编辑器右键菜单 -->
+      <Group guid="guidAgentExtensionCmdSet" id="EditorContextGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN"/>
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidAgentExtensionCmdSet" id="OpenAgentChatCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidAgentExtensionCmdSet" id="MyMenuGroup" />
+        <Strings>
+          <ButtonText>Claude Code Extend</ButtonText>
+        </Strings>
+      </Button>
+
+      <!-- 没有选中内容时禁用：DefaultDisabled + 运行时按选区状态启用 -->
+      <Button guid="guidAgentExtensionCmdSet" id="SendSelectionCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidAgentExtensionCmdSet" id="EditorContextGroup" />
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>发送选中代码到 Claude Code Extend</ButtonText>
+        </Strings>
+      </Button>
+
+      <!-- 错误列表为空时整项隐藏 -->
+      <Button guid="guidAgentExtensionCmdSet" id="SendBuildErrorsCommandId" priority="0x0101" type="Button">
+        <Parent guid="guidAgentExtensionCmdSet" id="EditorContextGroup" />
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>发送构建错误到 Claude Code Extend</ButtonText>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidAgentExtensionPackage" value="{2fd97008-51e8-4776-bf26-e4505425dd11}" />
+
+    <GuidSymbol name="guidAgentExtensionCmdSet" value="{9C1F5D74-2B8E-4A36-B0D7-6E3F1A9C2D48}">
+      <IDSymbol name="MyMenuGroup" value="0x1020" />
+      <IDSymbol name="EditorContextGroup" value="0x1021" />
+      <IDSymbol name="OpenAgentChatCommandId" value="0x0100" />
+      <IDSymbol name="SendSelectionCommandId" value="0x0101" />
+      <IDSymbol name="SendBuildErrorsCommandId" value="0x0102" />
+    </GuidSymbol>
+  </Symbols>
+
+</CommandTable>

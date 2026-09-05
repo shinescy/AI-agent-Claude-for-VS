@@ -1,0 +1,31 @@
+# 构建产物
+[Bb]in/
+[Oo]bj/
+# dist 是给「拿去装」用的落脚点，装的是每次 Release 构建打出来的 vsix；
+# 产物不进仓库，需要哪一版重新构建即可（版本号在 source.extension.vsixmanifest）。
+dist/
+*.user
+*.suo
+
+# Visual Studio
+.vs/
+
+# 前端
+node_modules/
+AgentExtension/webview/assets/
+# index.html 也是 vite 的产物（源文件是 AgentExtension.Web/index.html）。
+# 资源名带内容哈希之后它每次构建都变，跟踪它只会让工作区永远是脏的。
+AgentExtension/webview/index.html
+AgentExtension.Web/*.tsbuildinfo
+
+# 子代理驱动开发的临时工作区（ledger、简报、复查包）
+.superpowers/
+
+# Playwright MCP 的临时产物（在浏览器里验前端时生成）
+.playwright-mcp/
+
+# Playwright 截图产物
+picker.png
+
+# 其他
+*.log
