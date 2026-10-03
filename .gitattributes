@@ -1,0 +1,5 @@
+# 默认按平台规范化行尾
+* text=auto
+
+# 协议测试样本：保持原始字节，行尾转换会让 fixture 与 CLI 真实输出产生偏差
+*.ndjson -text
