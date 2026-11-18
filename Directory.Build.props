@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    仅作用：屏蔽上级 F:\WrokSpace\NET\Directory.Build.props。
+    那份文件是给 FrameCore/SqlSugar 系其他解决方案用的全局包版本覆盖，
+    会给本仓库下所有项目无条件加上 SQLitePCLRaw.bundle_e_sqlite3（进而带出
+    不支持 AnyCPU 的 SourceGear.sqlite3）和 Snappier，与本 VSIX 扩展无关。
+    MSBuild 只导入"最近的" Directory.Build.props，本文件存在即可阻止继续向上查找，
+    不需要再显式导入上级文件。
+  -->
+</Project>
